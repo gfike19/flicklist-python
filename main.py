@@ -103,22 +103,22 @@ class AddMovie(webapp2.RequestHandler):
 
         # TODO 2
         # if the user typed nothing at all, redirect and yell at them
-        if not new_movie:
-            error = "Cannot have an empty entry, try again. <br>"
-            self.redirect('/?error={}'.format(cgi.escape(error, quote = "True"))
+        # if not new_movie:
+        #     error = "Cannot have an empty entry, try again. <br>"
+        #     self.redirect('/?error={}'.format(cgi.escape(error, quote = "True"))
 
 
         # TODO 3
         # if the user wants to add a terrible movie, redirect and yell at them
-        if terrible_movies.find(new_movie):
-            error = "You have chosen poorly, try again."
-            self.redirect('/?error={}'.format(cgi.escape(error, quote = "True"))
+        # if terrible_movies.index(new_movie):
+        #     error = "You have chosen poorly, try again."
+        #     self.redirect('/?error={}'.format(cgi.escape(error, quote = "True"))
 
 
 
         # TODO 1
         # 'escape' the user's input so that if they typed HTML, it doesn't mess up our site
-        new_movie = new_movie.format(cgi.escape(error, quote = True))
+        # new_movie = new_movie.format(cgi.escape(error, quote = True))
 
         # build response content
         new_movie_element = "<strong>" + new_movie + "</strong>"
