@@ -110,7 +110,11 @@ class AddMovie(webapp2.RequestHandler):
 
         # TODO 3
         # if the user wants to add a terrible movie, redirect and yell at them
+<<<<<<< HEAD
         # if terrible_movies.find(new_movie):
+=======
+        # if terrible_movies.index(new_movie):
+>>>>>>> 04cea2e4d6a66974bbbf975feabd6a9931600b86
         #     error = "You have chosen poorly, try again."
         #     self.redirect('/?error={}'.format(cgi.escape(error, quote = "True"))
 
