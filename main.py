@@ -66,6 +66,12 @@ class AddMovie(webapp2.RequestHandler):
 
         # TODO 1
         # Use a template to render the confirmation message
+        t_confirm = jinja_env.get_template("confirm.html")
+        confirm_content = t_confirm.render(movie=new_movie)
+        title = "FlickList: Add a Movie Off"
+        response = t_scaffolding.render(
+                    title = title, content = confirm_content)
+        self.response.write(response)
 
         self.response.write("Under construction...")
 
