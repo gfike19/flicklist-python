@@ -1,30 +1,12 @@
-import webapp2
-import cgi
+import webapp2, cgi, jinja2, os, re
+from google.appengine.ext import db
+from datetime import datetime
+import hashutils
 
-# html boilerplate for the top of every page
-page_header = """
-<!DOCTYPE html>
-<html>
-<head>
-    <title>FlickList</title>
-    <style type="text/css">
-        .error {
-            color: red;
-        }
-    </style>
-</head>
-<body>
-    <h1>
-        <a href="/">FlickList</a>
-    </h1>
-"""
 
-# html boilerplate for the bottom of every page
-page_footer = """
-</body>
-</html>
-"""
-
+# set up jinja
+template_dir = os.path.join(os.path.dirname(__file__), "templates")
+jinja_env = jinja2.Environment(loader = jinja2.FileSystemLoader(template_dir))
 
 # a list of movies that nobody should be allowed to watch
 terrible_movies = [
@@ -34,132 +16,348 @@ terrible_movies = [
     "Nine Lives"
 ]
 
+# a list of pages that anyone is allowed to visit
+# (any others require logging in)
+allowed_routes = [
+    "/login",
+    "/logout",
+    "/register"
+]
 
-def getCurrentWatchlist():
-    """ Returns the user's current watchlist """
 
-    # for now, we are just pretending
-    return [ "Star Wars", "Minions", "Freaky Friday", "My Favorite Martian" ]
+class User(db.Model):
+    """ Represents a user on our site """
+    username = db.StringProperty(required = True)
+    pw_hash = db.StringProperty(required = True)
 
 
-class Index(webapp2.RequestHandler):
+class Movie(db.Model):
+    """ Represents a movie that a user wants to watch or has watched """
+    title = db.StringProperty(required = True)
+    created = db.DateTimeProperty(auto_now_add = True)
+    watched = db.BooleanProperty(required = True, default = False)
+    datetime_watched = db.DateTimeProperty()
+    rating = db.StringProperty()
+    owner = db.ReferenceProperty(User, required = True)
+
+
+class Handler(webapp2.RequestHandler):
+    """ A base RequestHandler class for our app.
+        The other handlers inherit form this one.
+    """
+
+    def renderError(self, error_code):
+        """ Sends an HTTP error code and a generic "oops!" message to the client. """
+        self.error(error_code)
+        self.response.write("Oops! Something went wrong.")
+
+    def login_user(self, user):
+        """ Logs in a user specified by a User object """
+        user_id = user.key().id()
+        self.set_secure_cookie('user_id', str(user_id))
+
+    def logout_user(self):
+        """ Logs out the current user """
+        self.set_secure_cookie('user_id', '')
+
+    def read_secure_cookie(self, name):
+        """ Returns the value associated with a name in the user's cookie,
+            or returns None, if no value was found or the value is not valid
+        """
+        cookie_val = self.request.cookies.get(name)
+        if cookie_val:
+            return hashutils.check_secure_val(cookie_val)
+
+    def set_secure_cookie(self, name, val):
+        """ Adds a secure name-value pair cookie to the response """
+        cookie_val = hashutils.make_secure_val(val)
+        self.response.headers.add_header('Set-Cookie', '%s=%s; Path=/' % (name, cookie_val))
+
+    def initialize(self, *a, **kw):
+        """ Any subclass of webapp2.RequestHandler can implement a method called 'initialize'
+            to specify what should happen before handling a request.
+            Here, we use it to ensure that the user is logged in.
+            If not, and they try to visit a page that requires an logging in (like /ratings),
+            then we redirect them to the /login page
+        """
+        webapp2.RequestHandler.initialize(self, *a, **kw)
+        uid = self.read_secure_cookie('user_id')
+        self.user = uid and User.get_by_id(int(uid))
+
+        if not self.user and self.request.path not in allowed_routes:
+            self.redirect('/login')
+            return
+
+    def get_user_by_name(self, username):
+        """ Given a username, try to fetch the user from the database """
+        user = db.GqlQuery("SELECT * from User WHERE username = '%s'" % username)
+        if user:
+            return user.get()
+
+
+class Index(Handler):
     """ Handles requests coming in to '/' (the root of our site)
         e.g. www.flicklist.com/
     """
 
     def get(self):
+        """ Display the homepage (the list of unwatched movies) """
 
-        edit_header = "<h3>Edit My Watchlist</h3>"
+        # TODO 1
+        # We only want the Movies belonging to the current user
+        # Modify the query below.
+        # Instead of a GqlQuery, use an O.R.M. method like lines 186 and 187
+        unwatched_movies = db.GqlQuery("SELECT * FROM Movie WHERE watched = False")
 
-        # a form for adding new movies
-        add_form = """
-        <form action="/add" method="post">
-            <label>
-                I want to add
-                <input type="text" name="new-movie"/>
-                to my watchlist.
-            </label>
-            <input type="submit" value="Add It"/>
-        </form>
-        """
-
-        # a form for crossing off movies
-        # (first we build a dropdown from the current watchlist items)
-        crossoff_options = ""
-        for movie in getCurrentWatchlist():
-            crossoff_options += '<option value="{0}">{0}</option>'.format(movie)
-
-        crossoff_form = """
-        <form action="/cross-off" method="post">
-            <label>
-                I want to cross off
-                <select name="crossed-off-movie"/>
-                    {0}
-                </select>
-                from my watchlist.
-            </label>
-            <input type="submit" value="Cross It Off"/>
-        </form>
-        """.format(crossoff_options)
-
-        # if we have an error, make a <p> to display it
-        error = self.request.get("error")
-        error_element = "<p class='error'>" + error + "</p>" if error else ""
-
-        # combine all the pieces to build the content of our response
-        main_content = edit_header + add_form + crossoff_form + error_element
-        response = page_header + main_content + page_footer
+        t = jinja_env.get_template("frontpage.html")
+        response = t.render(
+                        movies = unwatched_movies,
+                        error = self.request.get("error"))
         self.response.write(response)
 
 
-class AddMovie(webapp2.RequestHandler):
+class AddMovie(Handler):
     """ Handles requests coming in to '/add'
         e.g. www.flicklist.com/add
     """
 
     def post(self):
-        # look inside the request to figure out what the user typed
-        new_movie = self.request.get("new-movie")
+        """ User wants to add a new movie to their list """
 
-        # TODO 2
+        new_movie_title = self.request.get("new-movie")
+
         # if the user typed nothing at all, redirect and yell at them
-        # if not new_movie:
-        #     error = "Cannot have an empty entry, try again. <br>"
-        #     self.redirect('/?error={}'.format(cgi.escape(error, quote = "True"))
+        if (not new_movie_title) or (new_movie_title.strip() == ""):
+            error = "Please specify the movie you want to add."
+            self.redirect("/?error=" + cgi.escape(error))
+            return
 
-
-        # TODO 3
         # if the user wants to add a terrible movie, redirect and yell at them
-<<<<<<< HEAD
-        # if terrible_movies.find(new_movie):
-=======
-        # if terrible_movies.index(new_movie):
->>>>>>> 04cea2e4d6a66974bbbf975feabd6a9931600b86
-        #     error = "You have chosen poorly, try again."
-        #     self.redirect('/?error={}'.format(cgi.escape(error, quote = "True"))
+        if new_movie_title in terrible_movies:
+            error = "Trust me, you don't want to add '{0}' to your Watchlist.".format(new_movie_title)
+            self.redirect("/?error=" + cgi.escape(error, quote=True))
+            return
 
-
-
-        # TODO 1
         # 'escape' the user's input so that if they typed HTML, it doesn't mess up our site
-        # new_movie = new_movie.format(cgi.escape(error, quote = True))
+        new_movie_title_escaped = cgi.escape(new_movie_title, quote=True)
 
-        # build response content
-        new_movie_element = "<strong>" + new_movie + "</strong>"
-        sentence = new_movie_element + " has been added to your Watchlist!"
-        response = page_header + "<p>" + sentence + "</p>" + page_footer
+        # construct a movie object for the new movie
+        movie = Movie(title = new_movie_title_escaped, owner = self.user)
+        movie.put()
+
+        # render the confirmation message
+        t = jinja_env.get_template("add-confirmation.html")
+        response = t.render(movie = movie)
         self.response.write(response)
 
 
-class CrossOffMovie(webapp2.RequestHandler):
-    """ Handles requests coming in to '/cross-off'
-        e.g. www.flicklist.com/cross-off
+class WatchedMovie(Handler):
+    """ Handles requests coming in to '/watched-it'
+        e.g. www.flicklist.com/watched-it
     """
 
     def post(self):
-        # look inside the request to figure out what the user typed
-        crossed_off_movie = self.request.get("crossed-off-movie")
+        """ User has watched a movie. """
+        watched_movie_id = self.request.get("watched-movie")
+        watched_movie = Movie.get_by_id( int(watched_movie_id) )
 
-        if (crossed_off_movie in getCurrentWatchlist()) == False:
-            # the user tried to cross off a movie that isn't in their list,
-            # so we redirect back to the front page and yell at them
+        # if we can't find the movie, reject.
+        if not watched_movie:
+            self.renderError(400)
+            return
 
-            # make a helpful error message
-            error = "'{0}' is not in your Watchlist, so you can't cross it off!".format(crossed_off_movie)
-            error_escaped = cgi.escape(error, quote=True)
+        # update the movie object to say the user watched it at this date in time
+        watched_movie.watched = True
+        watched_movie.datetime_watched = datetime.now()
+        watched_movie.put()
 
-            # redirect to homepage, and include error as a query parameter in the URL
-            self.redirect("/?error=" + error_escaped)
-
-        # if we didn't redirect by now, then all is well
-        crossed_off_movie_element = "<strike>" + crossed_off_movie + "</strike>"
-        confirmation = crossed_off_movie_element + " has been crossed off your Watchlist."
-        response = page_header + "<p>" + confirmation + "</p>" + page_footer
+        # render confirmation page
+        t = jinja_env.get_template("watched-it-confirmation.html")
+        response = t.render(movie = watched_movie)
         self.response.write(response)
+
+
+class MovieRatings(Handler):
+    """ Handles requests coming in to '/ratings'
+    """
+
+    def get(self):
+        """ Show a list of the movies the user has already watched """
+
+        # query for movies that the current user has already watched
+        query = Movie.all().filter("owner", self.user).filter("watched", True)
+        watched_movies = query.run()
+
+        t = jinja_env.get_template("ratings.html")
+        response = t.render(movies = watched_movies)
+        self.response.write(response)
+
+    def post(self):
+        """ User wants to rate a movie """
+
+        rating = self.request.get("rating")
+        movie_id = self.request.get("movie")
+
+        movie = Movie.get_by_id( int(movie_id) )
+
+        if movie and rating:
+            # update the rating of the movie object
+            movie.rating = rating
+            movie.put()
+
+            # render confirmation
+            t = jinja_env.get_template("rating-confirmation.html")
+            response = t.render(movie = movie)
+            self.response.write(response)
+        else:
+            self.renderError(400)
+
+
+class RecentlyWatchedMovies(Handler):
+    """ Handles requests coming in to '/recently-watched'
+    """
+
+    def get(self):
+        """ Display a list of movies that have recently been watched (by any user) """
+
+        # query for watched movies (by any user), sorted by how recently the movie was watched
+        query = Movie.all().filter("watched", True).order("-datetime_watched")
+        # get the first 20 results
+        recently_watched_movies = query.fetch(limit = 20)
+
+        # TODO 4
+        # Replace the code below with code that renders the 'recently-watched.html' template
+        # Don't forget to pass recently_watched_movies over to your template.
+        response = ""
+        for movie in recently_watched_movies:
+            response += movie.title + ", "
+
+        self.response.write(response)
+
+
+class Login(Handler):
+
+    def render_login_form(self, error=""):
+        t = jinja_env.get_template("login.html")
+        response = t.render(error=error)
+        self.response.write(response)
+
+    def get(self):
+        """ Display the login page """
+        self.render_login_form()
+
+    def post(self):
+        """ User is trying to log in """
+        submitted_username = self.request.get("username")
+        submitted_password = self.request.get("password")
+
+        user = self.get_user_by_name(submitted_username)
+        if not user:
+            self.render_login_form(error = "Invalid username")
+        elif not hashutils.valid_pw(submitted_username, submitted_password, user.pw_hash):
+            self.render_login_form(error = "Invalid password")
+        else:
+            self.login_user(user)
+            self.redirect("/")
+
+
+class Logout(Handler):
+
+    def get(self):
+        """ User is trying to log out """
+        self.logout_user()
+        self.redirect("/login")
+
+
+class Register(Handler):
+
+    def validate_username(self, username):
+        """ Returns the username string untouched if it is valid,
+            otherwise returns an empty string
+        """
+        USER_RE = re.compile(r"^[a-zA-Z0-9_-]{3,20}$")
+        if USER_RE.match(username):
+            return username
+        else:
+            return ""
+
+    def validate_password(self, password):
+        """ Returns the password string untouched if it is valid,
+            otherwise returns an empty string
+        """
+        PWD_RE = re.compile(r"^.{3,20}$")
+        if PWD_RE.match(password):
+            return password
+        else:
+            return ""
+
+    def validate_verify(self, password, verify):
+        """ Returns the password verification string untouched if it matches
+            the password, otherwise returns an empty string
+        """
+        if password == verify:
+            return verify
+
+    def get(self):
+        """ Display the registration page """
+        t = jinja_env.get_template("register.html")
+        response = t.render(errors={})
+        self.response.out.write(response)
+
+    def post(self):
+        """ User is trying to register """
+        submitted_username = self.request.get("username")
+        submitted_password = self.request.get("password")
+        submitted_verify = self.request.get("verify")
+
+        username = self.validate_username(submitted_username)
+        password = self.validate_password(submitted_password)
+        verify = self.validate_verify(submitted_password, submitted_verify)
+
+        errors = {}
+        existing_user = self.get_user_by_name(username)
+        has_error = False
+
+        if existing_user:
+            errors['username_error'] = "A user with that username already exists"
+            has_error = True
+        elif (username and password and verify):
+            # create new user object
+            pw_hash = hashutils.make_pw_hash(username, password)
+            user = User(username=username, pw_hash=pw_hash)
+            user.put()
+
+            self.login_user(user)
+        else:
+            has_error = True
+
+            if not username:
+                errors['username_error'] = "That's not a valid username"
+
+            if not password:
+                errors['password_error'] = "That's not a valid password"
+
+            if not verify:
+                errors['verify_error'] = "Passwords don't match"
+
+        if has_error:
+            t = jinja_env.get_template("register.html")
+            response = t.render(username=username, errors=errors)
+            self.response.out.write(response)
+        else:
+            self.redirect('/')
 
 
 app = webapp2.WSGIApplication([
     ('/', Index),
     ('/add', AddMovie),
-    ('/cross-off', CrossOffMovie)
+    ('/watched-it', WatchedMovie),
+    ('/ratings', MovieRatings),
+
+    # TODO 3
+    # include another route for recently watched movies
+
+    ('/login', Login),
+    ('/logout', Logout),
+    ('/register', Register)
 ], debug=True)
