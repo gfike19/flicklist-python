@@ -108,6 +108,8 @@ class Index(Handler):
         # Modify the query below.
         # Instead of a GqlQuery, use an O.R.M. method like lines 186 and 187
         unwatched_movies = db.GqlQuery("SELECT * FROM Movie WHERE watched = False")
+        query = Movie.all().filter("owner", self.user).filter("watched", True)
+        watched_movies = query.run()
 
         t = jinja_env.get_template("frontpage.html")
         response = t.render(
@@ -181,6 +183,7 @@ class MovieRatings(Handler):
     """ Handles requests coming in to '/ratings'
     """
 
+
     def get(self):
         """ Show a list of the movies the user has already watched """
 
@@ -217,6 +220,9 @@ class RecentlyWatchedMovies(Handler):
     """ Handles requests coming in to '/recently-watched'
     """
 
+    def render(self, title = "", rating = "", owner = ""):
+        self.response.write("recently-watched.html", title = title, rating =  rating, owner = owner)
+
     def get(self):
         """ Display a list of movies that have recently been watched (by any user) """
 
@@ -225,14 +231,17 @@ class RecentlyWatchedMovies(Handler):
         # get the first 20 results
         recently_watched_movies = query.fetch(limit = 20)
 
-        # TODO 4
+        #  4
         # Replace the code below with code that renders the 'recently-watched.html' template
         # Don't forget to pass recently_watched_movies over to your template.
         response = ""
         for movie in recently_watched_movies:
-            response += movie.title + ", "
+            owner = movie.owner
+            rating = movie.rating
+            title = movie.title
+            self.render(owner, rating, title)
 
-        self.response.write(response)
+
 
 
 class Login(Handler):
@@ -356,7 +365,7 @@ app = webapp2.WSGIApplication([
 
     # TODO 3
     # include another route for recently watched movies
-
+    ('/recent',RecentlyWatchedMovies),
     ('/login', Login),
     ('/logout', Logout),
     ('/register', Register)
