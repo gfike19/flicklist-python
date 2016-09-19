@@ -234,12 +234,12 @@ class RecentlyWatchedMovies(Handler):
         #  4
         # Replace the code below with code that renders the 'recently-watched.html' template
         # Don't forget to pass recently_watched_movies over to your template.
-        response = ""
+        # response = ""
         for movie in recently_watched_movies:
             owner = movie.owner
             rating = movie.rating
             title = movie.title
-            self.render(owner, rating, title)
+        self.render(owner, rating, title)
 
 
 
