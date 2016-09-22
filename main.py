@@ -220,9 +220,6 @@ class RecentlyWatchedMovies(Handler):
     """ Handles requests coming in to '/recently-watched'
     """
 
-    def render(self, title = "", rating = "", owner = ""):
-        self.response.write("recently-watched.html", title = title, rating =  rating, owner = owner)
-
     def get(self):
         """ Display a list of movies that have recently been watched (by any user) """
 
@@ -236,10 +233,12 @@ class RecentlyWatchedMovies(Handler):
         # Don't forget to pass recently_watched_movies over to your template.
         # response = ""
         for movie in recently_watched_movies:
-            owner = movie.owner
-            rating = movie.rating
-            title = movie.title
-        self.render(owner, rating, title)
+            owner = Movie.owner
+            rating = Movie.rating
+            title = Movie.title
+        t = jinja_env.get_template("recently-watched.html")
+        response = t.render(owner = owner, title = title, rating = rating)
+        self.response.write(response)
 
 
 
